@@ -25,6 +25,11 @@ ui <- dashboardPage(skin = "purple",
                                DT::dataTableOutput("dfTable"))
                       ),
                       fluidRow(
+                        column(2,
+                               actionButton(inputId = "resetP1", label = "Reset Plot")
+                        )
+                      ),
+                      fluidRow(
                         column(9,
                                h3(strong("Weighted Burst Probability")))
                       ),
@@ -39,6 +44,10 @@ ui <- dashboardPage(skin = "purple",
                         column(2,
                                actionButton(inputId = "resetP2", label = "Reset Plot")
                                )
+                      ),
+                      fluidRow(
+                        column(9,
+                               h3(strong("Regression Summary")))
                       ),
                       fluidRow(
                         column(4,
@@ -104,7 +113,7 @@ dfDBPBursts <- reactive({
     if(i!=nrow(df)){
       if(df$sna_cmt_no[i] != df$sna_cmt_no[i+1]){
         if(!is.na(df$DBP[i+1])){
-          if(!is.na(df$bp_cmt_text[i+1] != "CMT")){
+          if(!is.na(df$bp_cmt_text[i+1] != "CAL")){
             processList[[j]] <- df[i+1, c(6,8,9)]
             j <- j+1
           }
@@ -123,7 +132,7 @@ dfRaw <- reactive({
   dfRaw <- df[complete.cases(df),]
   dfRaw$bins <- cut(dfRaw$DBP,seq(40,120, by = 2))
   dfRaw$DBPbinEnd <- as.numeric(substring(unlist(lapply(strsplit(as.character(dfRaw$bins),
-                                                                 split = ',', fixed = TRUE), '[[', 2)), 1,2))
+                                                                 split = ',', fixed = TRUE), '[', 2)), 1,2))
   dfRaw
 })
  
@@ -150,7 +159,7 @@ dfCount <- reactive({
   dfCount <- merge(dfRawCount, dfBurstsCount, by = "bins", suffixes = c(".all", ".bursts"))
   dfCount$burstProb <- round(dfCount$n.bursts/dfCount$n.all*100, 2)
   dfCount$DBPbinEnd <- as.numeric(substring(unlist(lapply(strsplit(as.character(dfCount$bins),
-                                                                   split = ',', fixed = TRUE), '[[', 2)), 1,2))
+                                                                   split = ',', fixed = TRUE), '[', 2)), 1,2))
   sumDF <-  summarise_all(group_by(dfDBPBursts, bins), funs(sum(., na.rm = TRUE)))
   dfCount <- merge(dfCount, sumDF[,c(1,5)], by = "bins")
   dfCount <- mutate(dfCount, amp_burst = normalized/n.bursts) %>%
@@ -163,26 +172,84 @@ dfCount <- reactive({
 output$dfTable <- DT::renderDataTable({
   dfCount <- dfCount()
   dfCount2 <- dfCount[,c(9,12)]
+  dfCount2[,2] <- round(dfCount2[,2], 1)
   colnames(dfCount2) <- c("Diastolic BP", "Amp*Incidence")
-  datatable(dfCount2, options = list(dom = 't'), rownames = FALSE,
-            selection = 'none')
+  datatable(dfCount2, options = list(dom = 't'), rownames = FALSE)
 })
 
 output$dfTableWt <- DT::renderDataTable({
   dfCount <- dfCount()
   dfCount2 <- dfCount[,c(9,8)]
   colnames(dfCount2) <- c("Diastolic BP", "Burst Probability")
+  dfCount2[,2] <- round(dfCount2[,2], 1)
   datatable(dfCount2, options = list(dom = 't'), rownames = FALSE)
 })
 
-m1 <- reactive({
+dfRawWt <- reactive({
+  dfRaw <- dfRaw(); dfCount<- dfCount()
+  merge(dfRaw, dfCount[,8:9], by = "DBPbinEnd", all.x = TRUE)
+})  
+
+rxVals <- reactiveValues(p1keepRows = NULL, p2keepRows = NULL)
+
+observeEvent(input$fileId,{
+    rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
+                                          ncol = isolate(ncol(dfCount())), byrow = FALSE))
+  colnames(rxVals$p1keepRows) <- colnames(dfCount())
+  rxVals$p2keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
+                                          ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
+  colnames(rxVals$p2keepRows) <- colnames(dfRawWt())
+})
+
+observeEvent(input$dfTable_cell_clicked, {
+  res <- input$dfTable_cell_clicked
+  df <- dfCount()
+  rxVals$p1keepRows[which(df$DBPbinEnd == res$value),] <- 0
+})
+
+observeEvent(input$dfTableWt_cell_clicked, {
+  res <- input$dfTableWt_cell_clicked
+  df <- dfRawWt()
+  rxVals$p2keepRows[which(df$DBPbinEnd == res$value),] <- 0
+})
+
+dfCountClean <- reactive({
   dfCount <- dfCount()
+  dfCount[which(rxVals$p1keepRows != 1, arr.ind = TRUE)] <- NA
+  dfCount
+})
+
+dfRawWtClean <- reactive({
+  dfRawWt <- dfRawWt()
+  dfRawWt[which(rxVals$p2keepRows != 1, arr.ind = TRUE)] <- NA
+  dfRawWt
+})
+
+proxy1 = dataTableProxy('dfTable')
+proxy2 = dataTableProxy('dfTableWt')
+
+observeEvent(input$resetP1, {
+  rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
+                                        ncol = isolate(ncol(dfCount())), byrow = FALSE))
+  colnames(rxVals$p1keepRows) <- colnames(dfCount())
+  proxy1 %>% selectRows(NULL)
+})
+
+observeEvent(input$resetP2, {
+  rxVals$p2keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
+                                        ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
+  colnames(rxVals$p2keepRows) <- colnames(dfRawWt())
+  proxy2 %>% selectRows(NULL)
+})
+
+m1 <- reactive({
+  dfCount <- dfCountClean()
   lm(amp_incidence ~ DBPbinEnd, dfCount)
 })
 
 output$p1 <- renderPlot({
   m <- m1()
-  dfCount <- dfCount()
+  dfCount <- dfCountClean()
   eq <- substitute(italic(y) == b %.% italic(x) + a*","~~italic(r)^2~"="~r2,
                    list(a = round(coef(m)[1], digits = 1),
                         b = round(coef(m)[2], digits = 3),
@@ -197,40 +264,6 @@ output$p1 <- renderPlot({
   p1
 })
   
-dfRawWt <- reactive({
-  dfRaw <- dfRaw(); dfCount<- dfCount()
-  merge(dfRaw, dfCount[,8:9], by = "DBPbinEnd", all.x = TRUE)
-})  
-
-
-rxVals <- reactiveValues(keepRows = NULL)
-
-observeEvent(input$fileId,{
-                 rxVals$keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
-                                                         ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
-                 colnames(rxVals$keepRows) <- colnames(dfRawWt())
-               })
-
-observeEvent(input$dfTableWt_cell_clicked, {
-  res <- input$dfTableWt_cell_clicked
-  df <- dfRawWt()
-  rxVals$keepRows[which(df$DBPbinEnd == res$value),] <- 0
-})
-
-dfRawWtClean <- reactive({
-  dfRawWt <- dfRawWt()
-  dfRawWt[which(rxVals$keepRows != 1, arr.ind = TRUE)] <- NA
-  dfRawWt
-})
-
-proxy = dataTableProxy('dfTableWt')
-
-observeEvent(input$resetP2, {
-  rxVals$keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
-                                        ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
-  colnames(rxVals$keepRows) <- colnames(dfRawWt())
-  proxy %>% selectRows(NULL)
-})
 
 
 m2 <- reactive({
@@ -258,7 +291,7 @@ output$p2 <- renderPlot({
 })
 
 m3 <- reactive({
-  dfCount <- dfCount()
+  dfCount <- dfCountClean()
   lm(burstProb  ~ DBPbinEnd, dfCount)
 })
 
