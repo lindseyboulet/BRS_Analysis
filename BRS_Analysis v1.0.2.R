@@ -68,8 +68,6 @@ ui <- dashboardPage(skin = "purple",
                         column(4,
                                tableOutput('m3'))
                       )
-                     
-                      
                     )
 )
 
@@ -114,8 +112,11 @@ dfDBPBursts <- reactive({
       if(df$sna_cmt_no[i] != df$sna_cmt_no[i+1]){
         if(!is.na(df$DBP[i+1])){
           if(!is.na(df$bp_cmt_text[i+1] != "CAL")){
-            processList[[j]] <- df[i+1, c(6,8,9)]
-            j <- j+1
+            if(length(grep("burst", df$sna_cmt_text[i],
+                           ignore.case = TRUE))>0){
+              processList[[j]] <- df[i+1, c(6,8,9)]
+              j <- j+1
+            }
           }
         }
       }
