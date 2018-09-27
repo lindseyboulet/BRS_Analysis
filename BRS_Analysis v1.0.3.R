@@ -93,7 +93,7 @@ server <- function(input, output, session) {
 cleanData <- reactive({
   df <- read.csv(paste0("./rawData/", input$fileId))
   cols <-  c("start", "duration", "bp_cmt_text", "bp_mean", "SBP", "DBP",
-             "sna_cmt_text", "sna_cmt_no", "sna_maxMin")
+             "sna_cmt_text", "sna_cmt_no", "sna_Min","sna_maxMin")
   colnames(df) <- cols
   df <- df[-(1:2),]
   numCols <- cols[-c(3,7)]
@@ -105,24 +105,26 @@ cleanData <- reactive({
 
 dfDBPBursts <- reactive({
   df <- cleanData()
-  processList <- list()
-  j <- 1
-  for(i in 1:nrow(df)){
-    if(i!=nrow(df)){
-      if(df$sna_cmt_no[i] != df$sna_cmt_no[i+1]){
-        if(!is.na(df$DBP[i+1])){
-          if(!is.na(df$bp_cmt_text[i+1] != "CAL")){
-            if(length(grep("burst", df$sna_cmt_text[i],
-                           ignore.case = TRUE))>0){
-              processList[[j]] <- df[i+1, c(6,8,9)]
-              j <- j+1
-            }
-          }
-        }
-      }
-    }
-  }
-  dfDBPBursts <- ldply(processList, data.frame)
+  dfDBPBursts <- filter(df, sna_cmt_text == "BURST" & bp_cmt_text != "CAL" | sna_cmt_text == "burst") %>% .[!duplicated(.$sna_cmt_no), ]
+  # processList <- list()
+  # j <- 1
+  # for(i in 1:nrow(df)){
+  #   if(i!=nrow(df)){
+  #     if(df$sna_cmt_no[i] != df$sna_cmt_no[i+1]){
+  #       if(!is.na(df$DBP[i+1])){
+  #         if(!is.na(df$bp_cmt_text[i+1] != "CAL")){
+  #           if(length(grep("burst", df$sna_cmt_text[i],
+  #                          ignore.case = TRUE))>0){
+  #             processList[[j]] <- df[i+1, c(6,8,10)]
+  #             j <- j+1
+  #           }
+  #         }
+  #       }
+  #     }
+  #   }
+  # }
+  # processList <- lapply(vestorOfFilenames, read.csv)
+  # dfDBPBursts <- ldply(processList, data.frame)
   dfDBPBursts$normalized <- dfDBPBursts$sna_maxMin/max(dfDBPBursts$sna_maxMin)*100
   dfDBPBursts$bins <- cut(dfDBPBursts$DBP,seq(40,120, by = 2))
   dfDBPBursts
@@ -161,8 +163,8 @@ dfCount <- reactive({
   dfCount$burstProb <- round(dfCount$n.bursts/dfCount$n.all*100, 2)
   dfCount$DBPbinEnd <- as.numeric(substring(unlist(lapply(strsplit(as.character(dfCount$bins),
                                                                    split = ',', fixed = TRUE), '[', 2)), 1,2))
-  sumDF <-  summarise_all(group_by(dfDBPBursts, bins), funs(sum(., na.rm = TRUE)))
-  dfCount <- merge(dfCount, sumDF[,c(1,5)], by = "bins")
+  sumDF <-  summarise_all(group_by(dfDBPBursts[,-c(3,7)], bins), funs(sum(., na.rm = TRUE)))
+  dfCount <- merge(dfCount, sumDF[,c(1,10)], by = "bins")
   dfCount <- mutate(dfCount, amp_burst = normalized/n.bursts) %>%
     mutate(amp_incidence = amp_burst*burstProb)
   
