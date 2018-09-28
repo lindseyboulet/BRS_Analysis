@@ -10,7 +10,7 @@ header <- dashboardHeader(title = "BRS Analysis")
 ui <- dashboardPage(skin = "purple",
                     title="Baroreflex Sensitivity Analysis",
                     header,                    
-                    dashboardSidebar(width = 150,
+                    dashboardSidebar(width = 300,
                                      uiOutput("fileId")
                     ),      
                     dashboardBody(
@@ -133,6 +133,7 @@ dfDBPBursts <- reactive({
 dfRaw <- reactive({
   df <- cleanData()
   dfRaw <- df[complete.cases(df),]
+  dfRaw <- filter(dfRaw, bp_cmt_text != "CAL" & bp_cmt_text != "cal")
   dfRaw$bins <- cut(dfRaw$DBP,seq(40,120, by = 2))
   dfRaw$DBPbinEnd <- as.numeric(substring(unlist(lapply(strsplit(as.character(dfRaw$bins),
                                                                  split = ',', fixed = TRUE), '[', 2)), 1,2))
