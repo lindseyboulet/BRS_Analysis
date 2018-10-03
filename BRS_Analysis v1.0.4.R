@@ -1,7 +1,7 @@
 # Load packages
 y <- c("shiny", "plyr", "dplyr", "reshape", "shinythemes", "ggplot2", "readr", "shinyFiles",
        "shinyjs", "taRifx", "shinydashboard", "here", "plotrix", "data.table", "gridExtra",
-       "rmarkdown", "ggthemes", "DT")
+       "rmarkdown", "ggthemes", "DT", "knitr", "here", "Cairo", "grid")
 for(i in 1:length(y)){is_installed <- function(mypkg){is.element(mypkg, installed.packages()[,1])}
 if(!is_installed(y[i])){install.packages(y[i], repos="http://lib.stat.cmu.edu/R/CRAN")}
 library(y[i], character.only=TRUE, quietly=TRUE,verbose=FALSE)}
@@ -11,7 +11,8 @@ ui <- dashboardPage(skin = "purple",
                     title="Baroreflex Sensitivity Analysis",
                     header,                    
                     dashboardSidebar(width = 300,
-                                     uiOutput("fileId")
+                                     uiOutput("fileId"),
+                                     actionButton("saveData", "Save Analysis")
                     ),      
                     dashboardBody(
                       fluidRow(
@@ -20,11 +21,16 @@ ui <- dashboardPage(skin = "purple",
                       ),
                       fluidRow(
                         column(9,
-                               plotOutput('p1')),
+                               plotOutput('p1',
+                                  click = "plot1_click")),
                         column(3,
                                DT::dataTableOutput("dfTable"))
                       ),
                       fluidRow(
+                        tags$head(
+                          tags$style(HTML('#resetP1{background-color:#6a51a3;
+                                                    color:#f7fbff}'))
+                        ),
                         column(2,
                                actionButton(inputId = "resetP1", label = "Reset Plot")
                         )
@@ -35,12 +41,17 @@ ui <- dashboardPage(skin = "purple",
                       ),
                       fluidRow(
                         column(9,
-                               plotOutput('p2')),
+                               plotOutput('p2',
+                                          click = "plot2_click")),
                         column(3,
                                DT::dataTableOutput('dfTableWt'))
                         
                       ),
                       fluidRow(
+                        tags$head(
+                          tags$style(HTML('#resetP2{background-color:#6a51a3;
+                                                    color:#f7fbff}'))
+                        ),
                         column(2,
                                actionButton(inputId = "resetP2", label = "Reset Plot")
                                )
@@ -76,7 +87,34 @@ ui <- dashboardPage(skin = "purple",
 # Define server function
 server <- function(input, output, session) {
   session$onSessionEnded(stopApp)
-  # df <- read.csv("rawData.csv")
+
+  plotPDF <- function(plotList, ncol, filename, width, height){
+    # Load packages
+    cairo_pdf(file = filename, width = width, height = height)
+    gpVec <- c("gp1", "gp2", "gp3", "gp4", "gp5", "gp6", "gp7", "gp8")
+    p1vec <- c("p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8")
+    plotNum <- length(plotList)
+    names(plotList) <- p1vec[1:plotNum]
+    args <- ""
+    colArgs <- ""
+    for (i in 1:plotNum){
+      eval(parse(text = paste0(gpVec[i], "<-ggplot_gtable(ggplot_build(plotList[[i]]))")))
+      args <- paste(args, ", ", gpVec[i], "$widths[2:3]", sep = "")
+      colArgs <- paste(colArgs, ", ", gpVec[i], sep = "")
+    }
+    substrRight <- function(x, n){substr(x, nchar(x)-n+1, nchar(x))}
+    args <- substrRight(args, nchar(args)-2)
+    colArgs <- substrRight(colArgs, nchar(colArgs)-2)
+    maxWidth = eval(parse(text = paste("unit.pmax(", args, ")", sep = "")))
+    gpList <- list()
+    for (i in 1:plotNum){
+      eval(parse(text = paste(gpVec[i], "$widths[2:3]", "<- maxWidth", sep = "")))
+      eval(parse(text = paste(gpVec[i], "$heights", "<- gp1$heights", sep = "")))
+      gpList[[i]] <- eval(parse(text = gpVec[i]))
+    }
+    eval(parse(text = paste("grid.arrange(", colArgs, ", ncol = ", ncol, ")", sep = "")))
+    dev.off()
+  }  
   
   fileIndex <- reactive({
     input$updateFileList
@@ -106,25 +144,6 @@ cleanData <- reactive({
 dfDBPBursts <- reactive({
   df <- cleanData()
   dfDBPBursts <- filter(df, sna_cmt_text == "BURST" & bp_cmt_text != "CAL" | sna_cmt_text == "burst") %>% .[!duplicated(.$sna_cmt_no), ]
-  # processList <- list()
-  # j <- 1
-  # for(i in 1:nrow(df)){
-  #   if(i!=nrow(df)){
-  #     if(df$sna_cmt_no[i] != df$sna_cmt_no[i+1]){
-  #       if(!is.na(df$DBP[i+1])){
-  #         if(!is.na(df$bp_cmt_text[i+1] != "CAL")){
-  #           if(length(grep("burst", df$sna_cmt_text[i],
-  #                          ignore.case = TRUE))>0){
-  #             processList[[j]] <- df[i+1, c(6,8,10)]
-  #             j <- j+1
-  #           }
-  #         }
-  #       }
-  #     }
-  #   }
-  # }
-  # processList <- lapply(vestorOfFilenames, read.csv)
-  # dfDBPBursts <- ldply(processList, data.frame)
   dfDBPBursts$normalized <- dfDBPBursts$sna_maxMin/max(dfDBPBursts$sna_maxMin)*100
   dfDBPBursts$bins <- cut(dfDBPBursts$DBP,seq(40,120, by = 2))
   dfDBPBursts
@@ -172,23 +191,6 @@ dfCount <- reactive({
   dfCount
 })  
 
-
-output$dfTable <- DT::renderDataTable({
-  dfCount <- dfCount()
-  dfCount2 <- dfCount[,c(9,12)]
-  dfCount2[,2] <- round(dfCount2[,2], 1)
-  colnames(dfCount2) <- c("Diastolic BP", "Amp*Incidence")
-  datatable(dfCount2, options = list(dom = 't'), rownames = FALSE)
-})
-
-output$dfTableWt <- DT::renderDataTable({
-  dfCount <- dfCount()
-  dfCount2 <- dfCount[,c(9,8)]
-  colnames(dfCount2) <- c("Diastolic BP", "Burst Probability")
-  dfCount2[,2] <- round(dfCount2[,2], 1)
-  datatable(dfCount2, options = list(dom = 't'), rownames = FALSE)
-})
-
 dfRawWt <- reactive({
   dfRaw <- dfRaw(); dfCount<- dfCount()
   merge(dfRaw, dfCount[,8:9], by = "DBPbinEnd", all.x = TRUE)
@@ -197,7 +199,7 @@ dfRawWt <- reactive({
 rxVals <- reactiveValues(p1keepRows = NULL, p2keepRows = NULL)
 
 observeEvent(input$fileId,{
-    rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
+  rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
                                           ncol = isolate(ncol(dfCount())), byrow = FALSE))
   colnames(rxVals$p1keepRows) <- colnames(dfCount())
   rxVals$p2keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
@@ -205,21 +207,10 @@ observeEvent(input$fileId,{
   colnames(rxVals$p2keepRows) <- colnames(dfRawWt())
 })
 
-observeEvent(input$dfTable_cell_clicked, {
-  res <- input$dfTable_cell_clicked
-  df <- dfCount()
-  rxVals$p1keepRows[which(df$DBPbinEnd == res$value),] <- 0
-})
-
-observeEvent(input$dfTableWt_cell_clicked, {
-  res <- input$dfTableWt_cell_clicked
-  df <- dfRawWt()
-  rxVals$p2keepRows[which(df$DBPbinEnd == res$value),] <- 0
-})
-
 dfCountClean <- reactive({
   dfCount <- dfCount()
   dfCount[which(rxVals$p1keepRows != 1, arr.ind = TRUE)] <- NA
+  dfCount <- dfCount[which(complete.cases(dfCount)),]
   dfCount
 })
 
@@ -229,21 +220,31 @@ dfRawWtClean <- reactive({
   dfRawWt
 })
 
-proxy1 = dataTableProxy('dfTable')
-proxy2 = dataTableProxy('dfTableWt')
-
-observeEvent(input$resetP1, {
-  rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
-                                        ncol = isolate(ncol(dfCount())), byrow = FALSE))
-  colnames(rxVals$p1keepRows) <- colnames(dfCount())
-  proxy1 %>% selectRows(NULL)
+dtDfTable <- reactive({
+  dfCount <- dfCountClean()
+  dfCount2 <- dfCount[,c(9,12)]
+  dfCount2[,2] <- round(dfCount2[,2], 1)
+  colnames(dfCount2) <- c("Diastolic BP", "Amp*Incidence")
+  dfCount2
+})
+output$dfTable <- DT::renderDataTable({
+  datatable(dtDfTable(), options = list(dom = 't'), rownames = FALSE,
+            selection = 'none')
 })
 
-observeEvent(input$resetP2, {
-  rxVals$p2keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
-                                        ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
-  colnames(rxVals$p2keepRows) <- colnames(dfRawWt())
-  proxy2 %>% selectRows(NULL)
+dtDfTableWt <- reactive({
+  dfWt <- dfRawWtClean()
+  dfCount <- dfCount()
+  dfCount <- dfCount[which(dfCount$DBPbinEnd %in% unique(dfWt$DBPbinEnd)),]
+  dfCount2 <- dfCount[,c(9,8)]
+  colnames(dfCount2) <- c("Diastolic BP", "Burst Probability")
+  dfCount2[,2] <- round(dfCount2[,2], 1)
+  dfCount2
+})
+  
+ output$dfTableWt <- DT::renderDataTable({ 
+  datatable(dtDfTableWt(), options = list(dom = 't'), rownames = FALSE,
+            selection = 'none')
 })
 
 m1 <- reactive({
@@ -251,7 +252,7 @@ m1 <- reactive({
   lm(amp_incidence ~ DBPbinEnd, dfCount)
 })
 
-output$p1 <- renderPlot({
+p1Fig <- reactive({
   m <- m1()
   dfCount <- dfCountClean()
   eq <- substitute(italic(y) == b %.% italic(x) + a*","~~italic(r)^2~"="~r2,
@@ -259,24 +260,22 @@ output$p1 <- renderPlot({
                         b = round(coef(m)[2], digits = 3),
                         r2 = format(summary(m)$r.squared, digits = 3)))  
   p1 <- ggplot(dfCount, aes(x= DBPbinEnd, y = amp_incidence)) +
-    geom_point(size = 3) +
+    geom_point(size = 5, color = '#984ea3') +
     stat_smooth(method = "lm", se = FALSE) +
     labs(x = "Diastolic BP", y = "Total MSNA") +
     annotate(geom = 'text', x = -Inf, y = Inf, hjust = -0.2, vjust = 2,
              label = as.character(as.expression(eq)), parse = TRUE, size = 8)+
     theme_economist(base_size = 20) 
   p1
-})
+  })
+output$p1 <- renderPlot({p1Fig()})
   
-
-
 m2 <- reactive({
   dfRaw <- dfRawWtClean()
   lm(burstProb ~ DBPbinEnd, dfRaw)
 })
 
-
-output$p2 <- renderPlot({
+p2Fig <- reactive({
   m2 <- m2()
   dfRawWt <- dfRawWtClean()
     eq2 <- substitute(italic(y) == b %.% italic(x) + a*","~~italic(r)^2~"="~r2,
@@ -285,7 +284,7 @@ output$p2 <- renderPlot({
                          r2 = format(summary(m2)$r.squared, digits = 3)))
   
   p2 <- ggplot(dfRawWt, aes(x = DBPbinEnd, y = burstProb)) +
-    geom_point(size = 3) +
+    geom_point(size = 5, color = '#984ea3') +
     stat_smooth(method = "lm", se = FALSE) +
     labs(x = "Diastolic BP", y = "Burst Probability") +
     annotate(geom = 'text', x = -Inf, y = Inf, hjust = -0.2, vjust = 2,
@@ -293,13 +292,14 @@ output$p2 <- renderPlot({
     theme_economist(base_size = 20) 
   p2
 })
+output$p2 <- renderPlot({p2Fig()})
 
 m3 <- reactive({
   dfCount <- dfCountClean()
   lm(burstProb  ~ DBPbinEnd, dfCount)
 })
 
-output$m1 <- renderTable(colnames = FALSE, {
+m1Df <- reactive({
   m1 <- m1()
   sum <- summary(m1)
   df <- data.frame(matrix(nrow = 4, ncol = 2))
@@ -307,9 +307,11 @@ output$m1 <- renderTable(colnames = FALSE, {
   df[1:2,2] <- round(sum$coefficients[c(2,1),1],2)
   df[3,2] <- round(sum$coefficients[1,4],2)
   df[4, 2] <-  sum$r.squared
-  df
+  df 
 })
-output$m2 <- renderTable(colnames = FALSE, {
+output$m1 <- renderTable(colnames = FALSE, m1Df())
+
+m2Df <- reactive({
   m1 <- m2()
   sum <- summary(m1)
   df <- data.frame(matrix(nrow = 4, ncol = 2))
@@ -319,7 +321,9 @@ output$m2 <- renderTable(colnames = FALSE, {
   df[4, 2] <-  sum$r.squared
   df
 })
-output$m3 <- renderTable(colnames = FALSE, {
+output$m2 <- renderTable(colnames = FALSE, m2Df())
+
+m3Df <- reactive({
   m1 <- m3()
   sum <- summary(m1)
   df <- data.frame(matrix(nrow = 4, ncol = 2))
@@ -329,6 +333,58 @@ output$m3 <- renderTable(colnames = FALSE, {
   df[4, 2] <-  sum$r.squared
   df
 })
+output$m3 <- renderTable(colnames = FALSE, m3Df())
+
+observeEvent(input$plot1_click, {
+  res <- nearPoints(dfCount(), input$plot1_click, allRows = TRUE)
+  rxVals$p1keepRows[which(res$selected_==TRUE),1] <- 0
+})
+
+observeEvent(input$plot2_click, {
+  res <- nearPoints(dfRawWt(), input$plot2_click, allRows = TRUE)
+  rxVals$p2keepRows[which(res$selected_==TRUE),1] <- 0
+})
+
+observeEvent(input$resetP1, {
+  rxVals$p1keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfCount())),
+                                          ncol = isolate(ncol(dfCount())), byrow = FALSE))
+  colnames(rxVals$p1keepRows) <- colnames(dfCount())
+})
+
+observeEvent(input$resetP2, {
+  rxVals$p2keepRows <-  data.frame(matrix(1,nrow = isolate(nrow(dfRawWt())),
+                                          ncol = isolate(ncol(dfRawWt())), byrow = FALSE))
+  colnames(rxVals$p2keepRows) <- colnames(dfRawWt())
+})
+
+outputDf <- reactive({
+  m1Df <- m1Df(); m2Df <- m2Df(); m3Df <- m3Df()
+  dff <- merge(m1Df, m2Df, by = "X1")
+  dff <- merge(m3Df, dff, by = "X1")
+  ddf <- data.frame(t(dff))[-1,]
+  colnames(ddf) <- c("intercept", "mean", "p-value", "r2")
+  for(i in 1:ncol(ddf)){ddf[,i] <- as.numeric(as.character(ddf[,i]))}
+  ddf$fileId <- substr(input$fileId, 0, nchar(input$fileId)-4)
+  ddf$model <- c("sum", "prob_wt", "prob")
+  ddf
+})
+
+observeEvent(input$saveData, {
+  if(!dir.exists("./output")){
+    dir.create("./output")
+  }
+  outputDf <- outputDf()
+  write.csv(outputDf, file = paste0("./output/",
+              substr(input$fileId, 0, nchar(input$fileId)-4), "-lmOutput.csv"),
+            row.names = FALSE)
+  p1 <- p1Fig()
+  p1<- p1 +ggtitle(paste0("Sum of MSNA (", substr(input$fileId, 0, nchar(input$fileId)-4), ")"))
+  p2 <- p2Fig()
+  p2<- p2 +ggtitle("Weighted Burst Probability")
+  plotPDF(list(p1,p2), 1, paste0("./output/",
+                substr(input$fileId, 0, nchar(input$fileId)-4), ".pdf"), 12, 12)
+  })
+
 }
 
 # Create Shiny object
